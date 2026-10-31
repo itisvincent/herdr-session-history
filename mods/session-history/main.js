@@ -3,7 +3,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import {
-  spaces, panes, run, theme, shared, setShared, exec, home, appHome,
+  spaces, panes, run, theme, shared, setShared, exec, home, appHome, openOverlay, props, window,
 } from "herdr";
 
 const SCOPES = [
@@ -15,6 +15,7 @@ const AGENTS = [
   { id: "pi", label: "Pi" },
   { id: "claude", label: "Claude" },
   { id: "codex", label: "Codex" },
+  { id: "opencode", label: "OpenCode" },
 ];
 
 const scopeOf = () => SCOPES.find((s) => s.id === shared("session-history.scope")) ?? SCOPES[0];
@@ -68,23 +69,31 @@ export default class SessionHistory extends View {
     this.loading = true;
     this.error = null;
     cx.notify();
-    const script = `${appHome()}/mods/session-history/scan.ps1`;
+    const platform = window()?.platform;
     try {
-      const r = await exec("powershell", [
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-File", script,
-        // Always scan everything; scope/agent filtering happens client-side
-        // (instant) against this list.
-        "-Limit", "120",
-      ]);
+      let r;
+      if (platform === "windows") {
+        r = await exec("powershell", [
+          "-NoProfile",
+          "-ExecutionPolicy", "Bypass",
+          "-File", `${appHome()}/mods/session-history/scan.ps1`,
+          "-Limit", "120",
+        ]);
+      } else {
+        r = await exec("bash", [
+          `${appHome()}/mods/session-history/scan.sh`,
+          "--limit", "120",
+        ]);
+      }
       if (token !== this.token) return;
       if (r.code !== 0) {
-        this.error = (r.stderr || r.stdout || `scan exited ${r.code}`).trim().slice(0, 240);
+        const raw = (r.stderr || r.stdout || `scan exited ${r.code}`).trim().slice(0, 240);
+        this.error = /python3|scan\.sh/.test(raw)
+          ? "Scanner needs python3 (macOS: xcode-select --install)"
+          : raw;
         this.sessions = [];
       } else {
-        const raw = (r.stdout || "").trim();
-        const data = raw ? JSON.parse(raw) : { sessions: [] };
+        const data = JSON.parse((r.stdout || "").trim() || "{}" );
         this.sessions = Array.isArray(data.sessions) ? data.sessions : [];
         this.error = null;
       }
@@ -259,8 +268,37 @@ export default class SessionHistory extends View {
       .child(label);
   }
 
+  agentsMenu(t) {
+    const agents = agentsOf();
+    return v_flex()
+      .w_full()
+      .p(5)
+      .text_size(12.8)
+      .child(div().px(8).pt(4).pb(6).text_size(11).text_color(t.dim).child("Agents to scan"))
+      .children(AGENTS.map((a) => {
+        const on = agents.some((x) => x.id === a.id);
+        return h_flex()
+          .id(`menu-agent-${a.id}`)
+          .h(31)
+          .px(8)
+          .gap(9)
+          .rounded(7)
+          .items_center()
+          .text_color(t.foreground)
+          .hover((el) => el.bg(t.hover))
+          .on_click((_e, cx) => {
+            cx.stop_propagation();
+            this.toggleAgent(a.id);
+            cx.notify();
+          })
+          .child(div().flex_1().child(a.label))
+          .when(on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)));
+      }));
+  }
+
   render(cx) {
     const t = theme();
+    if (props()?.agentsMenu) return this.agentsMenu(t);
     const scope = scopeOf();
     const agents = agentsOf();
     const list = this.filtered();
@@ -481,17 +519,36 @@ export default class SessionHistory extends View {
         h_flex()
           .px(12)
           .py(8)
-          .gap(6)
+          .gap(4)
           .flex_none()
           .children(SCOPES.map((s) => this.chip(t, `scope-${s.id}`, s.label, scope.id === s.id, (c) => {
             setShared("session-history.scope", s.id);
             cx.notify();
           })))
           .child(div().flex_1())
-          .children(AGENTS.map((a) => this.chip(t, `agent-${a.id}`, a.label, agents.some((x) => x.id === a.id), () => {
-            this.toggleAgent(a.id);
-            cx.notify();
-          }))),
+          .child(
+            // Agent filter as a dropdown: keeps the header to one row.
+            h_flex()
+              .id("sh-agents-menu")
+              .px(8)
+              .h(22)
+              .gap(5)
+              .rounded(6)
+              .text_size(10.5)
+              .font_medium()
+              .flex()
+              .items_center()
+              .cursor_pointer()
+              .bg(t.raised)
+              .text_color(t.foreground)
+              .hover((el) => el.bg(t.hover))
+              .on_click((_e, c) => {
+                c.stop_propagation();
+                openOverlay({ mod: "session-history", kind: "popup", width: 200, height: 150, props: { agentsMenu: true } });
+              })
+              .child(svg("mods/workspace-chrome/layers.svg").size(12).text_color(t.dim))
+              .child(`Agents (${agents.length})`),
+          ),
       )
       .child(
         div()

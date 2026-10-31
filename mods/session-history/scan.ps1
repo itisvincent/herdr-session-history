@@ -207,6 +207,37 @@ if ($wanted.ContainsKey("codex")) {
   }
 }
 
+# OpenCode (best-effort: storage shape varies by version)
+if ($wanted.ContainsKey("opencode")) {
+  $ocRoot = Join-Path $env:USERPROFILE ".local\share\opencode\storage\session"
+  if (Test-Path -LiteralPath $ocRoot) {
+    Get-ChildItem -LiteralPath $ocRoot -Recurse -File -Filter "*.json" -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTimeUtc -Descending |
+      Select-Object -First ($Limit * 2) |
+      ForEach-Object {
+        try { $o = Get-Content $_.FullName -Raw -TotalCount 4096 | ConvertFrom-Json -ErrorAction Stop } catch { return }
+        $sid = ""
+        if ($o.id) { $sid = [string]$o.id } else { $sid = [IO.Path]::GetFileNameWithoutExtension($_.Name) }
+        $cwd = ""
+        if ($o.directory) { $cwd = [string]$o.directory } elseif ($o.cwd) { $cwd = [string]$o.cwd }
+        $title = ""
+        if ($o.title) { $title = [string]$o.title }
+        $argv = @("opencode", "--session", $sid)
+        $sessions.Add([ordered]@{
+          agent = "opencode"
+          id = $sid
+          path = $_.FullName
+          cwd = $cwd
+          folder = RelLabel $cwd
+          preview = $title
+          mtime = [int64]([DateTimeOffset]$_.LastWriteTimeUtc).ToUnixTimeMilliseconds()
+          size = [int64]$_.Length
+          argv = $argv
+        }) | Out-Null
+      }
+  }
+}
+
 $out = $sessions |
   Sort-Object mtime -Descending |
   Select-Object -First $Limit
