@@ -1,9 +1,9 @@
 // Session history panel. Minimal paint first, then full UI once the slot shows.
 
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import {
-  spaces, panes, run, theme, shared, setShared, exec, home, appHome, openOverlay, props, window,
+  spaces, panes, run, theme, shared, setShared, exec, home, appHome, openOverlay, props, window, knownAgents,
 } from "herdr";
 
 const SCOPES = [
@@ -11,11 +11,32 @@ const SCOPES = [
   { id: "spaces", label: "Spaces" },
   { id: "all", label: "All" },
 ];
+// Catalog mirrors Orca's Agent Session History: every CLI whose transcript
+// store we can read gets scanned; empty stores simply contribute no rows.
 const AGENTS = [
   { id: "pi", label: "Pi" },
   { id: "claude", label: "Claude" },
   { id: "codex", label: "Codex" },
   { id: "opencode", label: "OpenCode" },
+  { id: "gemini", label: "Gemini" },
+  { id: "cursor", label: "Cursor" },
+  { id: "droid", label: "Droid" },
+  { id: "muse", label: "Muse" },
+  { id: "omp", label: "OMP" },
+  { id: "prime", label: "Prime Agent" },
+  { id: "copilot", label: "GitHub Copilot" },
+  { id: "cline", label: "Cline" },
+  { id: "grok", label: "Grok" },
+  { id: "devin", label: "Devin" },
+  { id: "openclaw", label: "OpenClaw" },
+  { id: "rovo", label: "Rovo Dev" },
+  { id: "kimi", label: "Kimi" },
+  { id: "kiro", label: "Kiro" },
+  { id: "codebuddy", label: "CodeBuddy" },
+  { id: "jcode", label: "Jcode" },
+  { id: "qoder", label: "Qoder" },
+  { id: "zcode", label: "ZCode" },
+  { id: "hermes", label: "Hermes" },
 ];
 
 const scopeOf = () => SCOPES.find((s) => s.id === shared("session-history.scope")) ?? SCOPES[0];
@@ -53,7 +74,14 @@ export default class SessionHistory extends View {
     this.token = 0;
     this.expanded = null;
     this.booted = false;
+    this.icons = {};
     cx.spawn(async (cx) => {
+      // Orca-style logos: the app's program table carries per-agent icons.
+      try {
+        const known = await knownAgents();
+        this.icons = Object.fromEntries((known || []).map((p) => [p.key, p]));
+        cx.notify();
+      } catch {}
       await this.refresh(cx);
       this.booted = true;
       cx.notify();
@@ -277,6 +305,11 @@ export default class SessionHistory extends View {
       .child(div().px(8).pt(4).pb(6).text_size(11).text_color(t.dim).child("Agents to scan"))
       .children(AGENTS.map((a) => {
         const on = agents.some((x) => x.id === a.id);
+        const prog = (this.icons || {})[a.id];
+        const logo = prog?.icon
+          ? (prog.tint ? svg(prog.icon).size(14).flex_none().text_color(t.foreground)
+                       : image(prog.icon).w(16).h(16).flex_none())
+          : div().w(14).h(14).flex_none().rounded(4).bg(t.raised).text_color(t.foreground).text_size(9).font_bold().flex().items_center().justify_center().child(a.label[0]);
         return h_flex()
           .id(`menu-agent-${a.id}`)
           .h(31)
@@ -291,6 +324,7 @@ export default class SessionHistory extends View {
             this.toggleAgent(a.id);
             cx.notify();
           })
+          .child(logo)
           .child(div().flex_1().child(a.label))
           .when(on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)));
       }));
@@ -544,7 +578,7 @@ export default class SessionHistory extends View {
               .hover((el) => el.bg(t.hover))
               .on_click((_e, c) => {
                 c.stop_propagation();
-                openOverlay({ mod: "session-history", kind: "popup", width: 200, height: 150, props: { agentsMenu: true } });
+                openOverlay({ mod: "session-history", kind: "popup", width: 200, height: AGENTS.length * 32 + 26, props: { agentsMenu: true } });
               })
               .child(svg("mods/workspace-chrome/layers.svg").size(12).text_color(t.dim))
               .child(`Agents (${agents.length})`),

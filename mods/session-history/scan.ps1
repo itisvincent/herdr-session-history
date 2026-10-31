@@ -207,36 +207,106 @@ if ($wanted.ContainsKey("codex")) {
   }
 }
 
-# OpenCode (best-effort: storage shape varies by version)
-if ($wanted.ContainsKey("opencode")) {
-  $ocRoot = Join-Path $env:USERPROFILE ".local\share\opencode\storage\session"
-  if (Test-Path -LiteralPath $ocRoot) {
-    Get-ChildItem -LiteralPath $ocRoot -Recurse -File -Filter "*.json" -ErrorAction SilentlyContinue |
+function Add-ExtraAgent([string]$agent, [string[]]$roots, [string[]]$cwdFields, [string[]]$titleFields, [scriptblock]$argvOf) {
+  foreach ($root in $roots) {
+    if (-not (Test-Path -LiteralPath $root)) { continue }
+    $files = Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.Extension -in ".json",".jsonl" } |
       Sort-Object LastWriteTimeUtc -Descending |
-      Select-Object -First ($Limit * 2) |
-      ForEach-Object {
-        try { $o = Get-Content $_.FullName -Raw -TotalCount 4096 | ConvertFrom-Json -ErrorAction Stop } catch { return }
-        $sid = ""
-        if ($o.id) { $sid = [string]$o.id } else { $sid = [IO.Path]::GetFileNameWithoutExtension($_.Name) }
-        $cwd = ""
-        if ($o.directory) { $cwd = [string]$o.directory } elseif ($o.cwd) { $cwd = [string]$o.cwd }
-        $title = ""
-        if ($o.title) { $title = [string]$o.title }
-        $argv = @("opencode", "--session", $sid)
-        $sessions.Add([ordered]@{
-          agent = "opencode"
-          id = $sid
-          path = $_.FullName
-          cwd = $cwd
-          folder = RelLabel $cwd
-          preview = $title
-          mtime = [int64]([DateTimeOffset]$_.LastWriteTimeUtc).ToUnixTimeMilliseconds()
-          size = [int64]$_.Length
-          argv = $argv
-        }) | Out-Null
+      Select-Object -First ($Limit * 2)
+    foreach ($f in $files) {
+      try { $o = Get-Content $f.FullName -Raw | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+      if (-not $o) { continue }
+      $sid = $null
+      foreach ($fld in @("id","sessionId","session_id")) {
+        if ($o.$fld) { $sid = [string]$o.$fld; break }
       }
+      if (-not $sid) { $sid = [IO.Path]::GetFileNameWithoutExtension($f.Name) }
+      $cwd = ""
+      foreach ($fld in $cwdFields) {
+        if ($o.$fld) { $cwd = [string]$o.$fld; break }
+      }
+      $title = ""
+      foreach ($fld in $titleFields) {
+        if ($o.$fld) { $title = [string]$o.$fld; break }
+      }
+      $argv = & $argvOf $sid
+      $sessions.Add([ordered]@{
+        agent = $agent; id = $sid; path = $f.FullName; cwd = $cwd
+        folder = RelLabel $cwd; preview = $title
+        mtime = [int64]([DateTimeOffset]$f.LastWriteTimeUtc).ToUnixTimeMilliseconds()
+        size = [int64]$f.Length; argv = $argv
+      }) | Out-Null
+    }
   }
 }
+
+function Add-ExtraAgent([string]$agent, [string[]]$roots, [string[]]$cwdFields, [string[]]$titleFields, [scriptblock]$argvOf) {
+  foreach ($root in $roots) {
+    if (-not (Test-Path -LiteralPath $root)) { continue }
+    $files = Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.Extension -in ".json",".jsonl" } |
+      Sort-Object LastWriteTimeUtc -Descending |
+      Select-Object -First ($Limit * 2)
+    foreach ($f in $files) {
+      try { $raw = Get-Content $f.FullName -Raw -ErrorAction Stop; $o = $raw | ConvertFrom-Json -ErrorAction Stop } catch {}
+      if (-not $o) { continue }
+      $sid = $null
+      foreach ($fld in @("id","sessionId","session_id")) {
+        if ($o.$fld) { $sid = [string]$o.$fld; break }
+      }
+      if (-not $sid) { $sid = [IO.Path]::GetFileNameWithoutExtension($f.Name) }
+      $cwd = ""
+      foreach ($fld in $cwdFields) {
+        if ($o.$fld) { $cwd = [string]$o.$fld; break }
+      }
+      $title = ""
+      foreach ($fld in $titleFields) {
+        if ($o.$fld) { $title = [string]$o.$fld; break }
+      }
+      $argv = & $argvOf $sid
+      $sessions.Add([ordered]@{
+        agent = $agent; id = $sid; path = $f.FullName; cwd = $cwd
+        folder = RelLabel $cwd; preview = $title
+        mtime = [int64]([DateTimeOffset]$f.LastWriteTimeUtc).ToUnixTimeMilliseconds()
+        size = [int64]$f.Length; argv = $argv
+      }) | Out-Null
+    }
+  }
+}
+
+# OpenCode (best-effort: storage shape varies by version)
+Add-ExtraAgent "opencode" @("$env:USERPROFILE\.local\share\opencode\storage\session") @("directory","cwd") @("title") { param($sid) @("opencode","--session",$sid) }
+
+# Gemini (session json under tmp; resume is in-TUI /resume)
+Add-ExtraAgent "gemini" @("$env:USERPROFILE\.gemini\tmp") @("cwd") @("title") { param($sid) @("gemini") }
+
+# Cursor agent CLI chats
+Add-ExtraAgent "cursor" @("$env:USERPROFILE\.cursor\chats") @("cwd") @("title","firstPrompt") { param($sid) @("cursor-agent","--resume",$sid) }
+
+# Droid (Factory) home-scope sessions
+Add-ExtraAgent "droid" @("$env:USERPROFILE\.factory\sessions") @("cwd","workingDirectory") @("title") { param($sid) @("droid","--resume",$sid) }
+
+# Muse Code
+Add-ExtraAgent "muse" @("$env:USERPROFILE\.local\share\muse\sessions") @("cwd") @("title","firstPrompt") { param($sid) @("muse","resume",$sid) }
+
+# Qoder / CodeBuddy / Kimi / Kiro / Copilot / Grok / OMP / Devin / OpenClaw / Rovo / Cline / Jcode / Hermes / Antigravity / Prime / ZCode (best-effort)
+Add-ExtraAgent "qoder" @("$env:USERPROFILE\.qoder\projects") @("cwd") @("title") { param($sid) @("qoder") }
+Add-ExtraAgent "codebuddy" @("$env:USERPROFILE\.codebuddy\projects") @("cwd") @("title") { param($sid) @("codebuddy") }
+Add-ExtraAgent "kimi" @("$env:USERPROFILE\.kimi\sessions") @("cwd") @("title") { param($sid) @("kimi") }
+Add-ExtraAgent "kiro" @("$env:USERPROFILE\.kiro\sessions") @("cwd") @("title") { param($sid) @("kiro") }
+Add-ExtraAgent "copilot" @("$env:USERPROFILE\.copilot\sessions","$env:USERPROFILE\.copilot\cli\sessions") @("cwd") @("title") { param($sid) @("copilot") }
+Add-ExtraAgent "grok" @("$env:USERPROFILE\.grok\sessions") @("cwd") @("title") { param($sid) @("grok") }
+Add-ExtraAgent "omp" @("$env:USERPROFILE\.omp\sessions") @("cwd") @("title") { param($sid) @("omp") }
+Add-ExtraAgent "devin" @("$env:USERPROFILE\.devin\sessions") @("cwd") @("title") { param($sid) @("devin") }
+Add-ExtraAgent "openclaw" @("$env:USERPROFILE\.openclaw\sessions") @("cwd") @("title") { param($sid) @("openclaw") }
+Add-ExtraAgent "rovo" @("$env:USERPROFILE\.rovo\sessions") @("cwd") @("title") { param($sid) @("rovo") }
+Add-ExtraAgent "cline" @("$env:USERPROFILE\.cline\sessions","$env:USERPROFILE\.cline\projects") @("cwd") @("title","firstPrompt") { param($sid) @("cline") }
+Add-ExtraAgent "jcode" @("$env:USERPROFILE\.jcode\sessions","$env:USERPROFILE\.jcode\projects") @("cwd") @("title") { param($sid) @("jcode") }
+Add-ExtraAgent "hermes" @("$env:USERPROFILE\.hermes\sessions") @("cwd") @("title") { param($sid) @("hermes") }
+Add-ExtraAgent "antigravity" @("$env:USERPROFILE\.antigravity\sessions","$env:USERPROFILE\.gemini\antigravity") @("cwd") @("title") { param($sid) @("antigravity") }
+Add-ExtraAgent "prime" @("$env:USERPROFILE\.prime\sessions") @("cwd") @("title") { param($sid) @("prime-agent") }
+Add-ExtraAgent "zcode" @("$env:USERPROFILE\.zcode\projects") @("cwd") @("title") { param($sid) @("zcode") }
 
 $out = $sessions |
   Sort-Object mtime -Descending |

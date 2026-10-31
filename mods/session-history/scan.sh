@@ -186,6 +186,88 @@ if os.path.isdir(oc_root):
         title = str(o.get("title") or "")
         add("opencode", sid, path, cwd, clean(title), st.st_mtime * 1000, st.st_size, ["opencode", "--session", sid])
 
+# ---- Generic catalog (Orca-style: every CLI's transcript store we know) -----
+# Documented paths are exact; the rest are best-effort roots — empty stores
+# contribute nothing. Shapes differ per CLI, so id/cwd/preview use common
+# field names, falling back to the file name.
+import glob
+CATALOG = [
+    # (agent, [roots], id_fields, cwd_fields, preview_fields, argv_builder)
+    ("gemini", ["~/.gemini/tmp"], ["sessionId", "id"], [], ["title"], lambda sid, cwd, p: ["gemini"]),
+    ("cursor", ["~/.cursor/chats"], ["id", "sessionId"], ["cwd"], ["title", "firstPrompt"], lambda sid, cwd, p: ["cursor-agent", "--resume", sid]),
+    ("droid", ["~/.factory/sessions"], ["id", "sessionId"], ["cwd", "workingDirectory"], ["title"], lambda sid, cwd, p: ["droid", "--resume", sid]),
+    ("muse", ["~/.local/share/muse/sessions"], ["id", "sessionId"], ["cwd"], ["title", "firstPrompt"], lambda sid, cwd, p: ["muse", "resume", sid]),
+    ("opencode", ["~/.local/share/opencode/storage/session"], ["id"], ["directory", "cwd"], ["title"], lambda sid, cwd, p: ["opencode", "--session", sid]),
+    ("qoder", ["~/.qoder/projects"], ["id", "sessionId"], ["cwd"], ["title"], lambda sid, cwd, p: ["qoder"]),
+    ("codebuddy", ["~/.codebuddy/projects"], ["id", "sessionId"], ["cwd"], ["title"], lambda sid, cwd, p: ["codebuddy"]),
+    ("kimi", ["~/.kimi/sessions"], ["id", "sessionId"], ["cwd"], ["title"], lambda sid, cwd, p: ["kimi"]),
+    ("kiro", ["~/.kiro/sessions"], ["id", "sessionId"], ["cwd"], ["title"], lambda sid, cwd, p: ["kiro"]),
+    ("copilot", ["~/.copilot/sessions", "~/.copilot/cli/sessions"], ["id", "sessionId"], ["cwd"], ["title"], lambda sid, cwd, p: ["copilot"]),
+    ("grok", ["~/.grok/sessions"], ["id", "sessionId"], ["cwd"], ["title"], lambda sid, cwd, p: ["grok"]),
+    ("omp", ["~/.omp/sessions"], ["id", "sessionId"], ["cwd"], ["title"], lambda sid, cwd, p: ["omp"]),
+    ("devin", ["~/.devin/sessions"], ["id", "sessionId"], ["cwd"], ["title"], lambda sid, cwd, p: ["devin"]),
+    ("openclaw", ["~/.openclaw/sessions"], ["id", "sessionId"], ["cwd"], ["title"], lambda sid, cwd, p: ["openclaw"]),
+    ("antigravity", ["~/.antigravity/sessions", "~/.gemini/antigravity"], ["id"], ["cwd"], ["title"], lambda sid, cwd, p: ["antigravity"]),
+    ("prime", ["~/.prime/sessions"], ["id"], ["cwd"], ["title"], lambda sid, cwd, p: ["prime-agent"]),
+    ("zcode", ["~/.zcode/projects"], ["id", "sessionId"], ["cwd"], ["title"], lambda sid, cwd, p: ["zcode"]),
+    ("hermes", ["~/.hermes/sessions"], ["id"], ["cwd"], ["title"], lambda sid, cwd, p: ["hermes"]),
+    ("cline", ["~/.cline/sessions", "~/.cline/projects"], ["id", "sessionId"], ["cwd"], ["title", "firstPrompt"], lambda sid, cwd, p: ["cline"]), 
+    ("rovo", ["~/.rovo/sessions"], ["id", "sessionId"], ["cwd"], ["title"], lambda sid, cwd, p: ["rovo"]),
+    ("jcode", ["~/.jcode/sessions", "~/.jcode/projects"], ["id", "sessionId"], ["cwd"], ["title"], lambda sid, cwd, p: ["jcode"]),
+]
+
+def generic_pick(o, fields):
+    for f in fields:
+        if isinstance(o, dict) and o.get(f):
+            return str(o[f])
+    return None
+
+for agent, roots, id_fields, cwd_fields, preview_fields, argvb in CATALOG:
+    files = []
+    for root in roots:
+        root = os.path.expanduser(root)
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dirs, fnames in os.walk(root):
+            for fname in fnames:
+                if fname.endswith((".json", ".jsonl")):
+                    files.append(os.path.join(dirpath, fname))
+    files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    for path in files[: limit * 2]:
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        records = []
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                head = f.read(8192)
+            for line in head.splitlines():
+                line = line.strip()
+                if not line: continue
+                try: records.append(json.loads(line))
+                except Exception: records.append(None)
+                if len(records) >= 10: break
+            if not records or all(r is None for r in records):
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    records = [json.loads(f.read(8192))]
+        except Exception:
+            continue
+        sid = cwd = preview = None
+        for o in records + [{}]:
+            if sid and cwd and preview: break
+            if not sid: sid = generic_pick(o, id_fields)
+            if not cwd: cwd = generic_pick(o, cwd_fields)
+            if not preview: preview = generic_pick(o, preview_fields)
+        if not sid:
+            sid = os.path.splitext(os.path.basename(path))[0]
+        preview = clean(preview)
+        try:
+            st = os.stat(path)
+            add(agent, sid, path, cwd, preview, st.st_mtime * 1000, st.st_size, argvb(sid, cwd, path))
+        except OSError:
+            continue
+
 out.sort(key=lambda s: s["mtime"], reverse=True)
 print(json.dumps({"ok": True, "count": len(out[:limit]), "sessions": out[:limit]}))
 PYEOF
