@@ -8,6 +8,7 @@ import {
 
 const SCOPES = [
   { id: "folder", label: "This folder" },
+  { id: "spaces", label: "Spaces" },
   { id: "all", label: "All" },
 ];
 const AGENTS = [
@@ -101,14 +102,35 @@ export default class SessionHistory extends View {
     return String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   }
 
-  // Folders the active space really works in: its recorded folder plus every
-  // live terminal's cwd (a space's folder is often a parent, or stale).
+  // Exact-folder space lookup for labeling: a session inside a space's root
+  // shows the space's name, so "job-ai repo root of herdr-app space" reads
+  // "herdr-app" instead of a colliding folder name.
+  spaceLabelFor(cwd) {
+    const n = this.normPath(cwd);
+    if (!n) return null;
+    // Name the space whose live terminal is in this cwd (or whose root matches).
+    const tabIds = new Set();
+    let byPane = null;
+    for (const p of panes()) {
+      if (p.terminal && p.cwd && this.normPath(p.cwd) === n) { byPane = p.tab; break; }
+    }
+    if (byPane) {
+      const s = spaces().find((sp) => (sp.tabs || []).some((t) => t.id === byPane));
+      if (s) return s.name;
+    }
+    const space = spaces().find((sp) => this.normPath(sp.folder) === n);
+    return space ? space.name : null;
+  }
+
+  // Folders the active space really works in: every live terminal's cwd in
+  // its tabs. The space's recorded root folder is NOT included on purpose —
+  // it's often a stale parent (space created in repo A, terminal cd'd to B),
+  // which would pull unrelated sessions into one panel.
   spaceFolders() {
     const out = new Set();
     const space = spaces().find((s) => s.active);
     if (!space) return out;
     const add = (p) => { const n = this.normPath(p); if (n) out.add(n); };
-    add(space.folder);
     const tabIds = new Set((space.tabs || []).map((t) => t.id));
     for (const p of panes()) {
       if (p.terminal && tabIds.has(p.tab)) add(p.cwd);
@@ -126,6 +148,19 @@ export default class SessionHistory extends View {
     return false;
   }
 
+  // Which space a session belongs to: the space with a live terminal in this
+  // cwd, else the space whose root folder matches. Null = no space claims it.
+  assignSpace(s) {
+    const n = this.normPath(s.cwd);
+    if (!n) return null;
+    const pane = panes().find((p) => p.terminal && p.cwd && this.normPath(p.cwd) === n);
+    if (pane) {
+      const s2 = spaces().find((sp) => (sp.tabs || []).some((t) => t.id === pane.tab));
+      if (s2) return s2;
+    }
+    return spaces().find((sp) => this.normPath(sp.folder) === n) || null;
+  }
+
   filtered() {
     const q = (this.filter || "").trim().toLowerCase();
     const scope = scopeOf();
@@ -134,6 +169,7 @@ export default class SessionHistory extends View {
     return this.sessions.filter((s) => {
       if (allow.size && !allow.has(s.agent)) return false;
       if (folders && !this.inSpace(s.cwd, folders)) return false;
+      if (scope.id === "spaces" && !this.assignSpace(s)) return false;
       if (!q) return true;
       const hay = `${s.agent} ${s.folder || ""} ${s.cwd || ""} ${s.preview || ""} ${s.id || ""}`.toLowerCase();
       return hay.includes(q);
@@ -262,7 +298,7 @@ export default class SessionHistory extends View {
                 .when(s.agent === "codex", (el) => el.bg((t.ansi4 || t.accent) + "22").text_color(t.ansi4 || t.accent))
                 .child(div().text_size(9.5).font_bold().child(String(s.agent || "?").toUpperCase())),
             )
-            .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(s.folder || s.cwd || s.id))
+            .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(this.spaceLabelFor(s.cwd) || s.folder || s.cwd || s.id))
             .child(div().text_size(10.5).text_color(t.dim).child(age(s.mtime))),
         )
         .when(Boolean(s.preview), (el) =>
@@ -502,7 +538,31 @@ export default class SessionHistory extends View {
           .pb(6)
           .gap(1)
           .overflow_y_scrollbar()
-          .children(list.map((s, i) => row(s, i))),
+          .children(
+            scope.id === "spaces"
+              ? spaces().flatMap((sp) => {
+                  const members = list.filter((s) => {
+                    const owner = this.assignSpace(s);
+                    return owner && owner.id === sp.id;
+                  });
+                  if (!members.length) return [];
+                  return [
+                    h_flex()
+                      .id(`sh-group-${sp.id}`)
+                      .flex_none()
+                      .px(6)
+                      .pt(8)
+                      .pb(3)
+                      .gap(6)
+                      .items_center()
+                      .child(div().text_size(10.5).font_semibold().text_color(t.dim).child(sp.name))
+                      .child(div().flex_1().h(1).bg(t.border))
+                      .child(div().text_size(10).text_color(t.dim).child(String(members.length))),
+                    ...members.map((s, i) => row(s, i)),
+                  ];
+                })
+              : list.map((s, i) => row(s, i)),
+          ),
       );
   }
 }
