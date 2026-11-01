@@ -236,8 +236,30 @@ export default class SessionHistory extends View {
     return String(s).replace(/'/g, "''");
   }
 
-  // Orca-style: open Explorer with the transcript selected.
+  // Copy text to the clipboard: Set-Clipboard on Windows, pbcopy on macOS, wl-copy on
+  // Wayland or xclip on X11. The text goes in as an argument, never into a command line.
+  copy(text) {
+    const platform = window()?.platform;
+    if (platform === "windows") {
+      exec("powershell", ["-NoProfile", "-Command", `Set-Clipboard -Value '${this.psQuote(text)}'`]).catch(() => {});
+    } else {
+      const to = platform === "macos" ? "pbcopy" : "wl-copy 2>/dev/null || xclip -selection clipboard";
+      exec("sh", ["-c", `printf %s "$1" | (${to})`, "sh", text]).catch(() => {});
+    }
+  }
+
+  // Orca-style: show the transcript in the file manager. Explorer and Finder select the
+  // file; on Linux, xdg-open opens its folder (there's no portable "select this file").
   reveal(s) {
+    const platform = window()?.platform;
+    if (platform === "macos") {
+      exec("open", ["-R", s.path]).catch(() => {});
+      return;
+    }
+    if (platform !== "windows") {
+      exec("xdg-open", [String(s.path).replace(/\/[^/]*$/, "") || "/"]).catch(() => {});
+      return;
+    }
     exec("powershell", [
       "-NoProfile",
       "-Command",
@@ -255,6 +277,11 @@ export default class SessionHistory extends View {
     this.confirmDelete = null;
     this.expanded = null;
     cx.notify();
+    if (window()?.platform !== "windows") {
+      // argv, no shell: the path is never parsed.
+      exec("rm", ["-f", "--", s.path]).then(() => this.refresh(cx)).catch(() => this.refresh(cx));
+      return;
+    }
     exec("powershell", [
       "-NoProfile",
       "-Command",
@@ -408,8 +435,7 @@ export default class SessionHistory extends View {
                     .tooltip((s.argv || []).join(" "))
                     .on_click((_e, c) => {
                       c.stop_propagation();
-                      const cmd = (s.argv || []).map((a) => String(a).replace(/'/g, "''")).join(" ");
-                      exec("powershell", ["-NoProfile", "-Command", `Set-Clipboard -Value '${cmd}'`]).catch(() => {});
+                      this.copy((s.argv || []).join(" "));
                     })
                     .child("Copy cmd"),
                 )
@@ -426,7 +452,8 @@ export default class SessionHistory extends View {
                     .flex()
                     .items_center()
                     .hover((el) => el.bg(t.hover).text_color(t.foreground))
-                    .tooltip("Show this transcript in Explorer")
+                    .tooltip(window()?.platform === "windows" ? "Show this transcript in Explorer"
+                      : window()?.platform === "macos" ? "Show this transcript in Finder" : "Open this transcript's folder")
                     .on_click((_e, c) => {
                       c.stop_propagation();
                       this.reveal(s);

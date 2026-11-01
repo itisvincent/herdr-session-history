@@ -13,12 +13,13 @@ Point the tab bar at mods/space-tabs and add a "sessions" child to the panel-bod
 - **Files · Changes · Sessions** tabs in the tab bar (bundled `space-tabs` clone; shipped mods untouched)
 - Newest-first session list with one-line previews, per-agent chips (Pi / Claude / Codex), **This folder / All** scope, and an instant text filter
 - **Resume**: exact-folder match opens a tab in that space; otherwise `space.new` — a real space, tab, and running agent in the sidebar
-- **Reveal** selects the transcript file in Explorer; **Delete** arms first ("Delete?"), then removes it and rescans
+- **Reveal** selects the transcript file in Explorer (Windows) or Finder (macOS), or opens its folder (Linux); **Delete** arms first ("Delete?"), then removes it and rescans; **Copy cmd** copies the resume command
 
 ## Requirements
 
 - Herdr app (desktop)
-- Windows for the bundled `scan.ps1` scanner (v1; mac/Linux scanner port is a follow-up)
+- Windows (`scan.ps1`), macOS or Linux (`scan.sh`)
+- On Linux, `xdg-open` for Reveal and `wl-copy` (Wayland) or `xclip` (X11) for Copy cmd
 - `pi` / `claude` / `codex` on `PATH` for Resume
 
 See [RECIPE.md](RECIPE.md) for the full rebuild brief and layout wiring.
