@@ -26,12 +26,12 @@ An Orca-style **Agent Session History** for the Herdr app: a **Sessions** tab in
   - a session's cwd matches an existing space (exact folder) → `tab.new` there, then select the space;
   - otherwise → `space.new { folder, argv }` (real space + tab + agent).
   - argv per agent: `pi --session <file>`, `claude --resume <id>`, `codex resume <id>`.
-- **Reveal** → `explorer.exe /select,"<file>"`. **Delete** → arm/click-again, removes the transcript with `Remove-Item`, then rescan.
-- The scan repeats every 15 s; one PowerShell process per scan.
+- **Reveal** → Windows `explorer.exe /select,"<file>"`; macOS `open -R <file>`; Linux `xdg-open <folder>`. **Delete** → arm/click-again, removes the transcript (`Remove-Item` on Windows, `rm -f -- <file>` elsewhere), then rescan. **Copy cmd** → `Set-Clipboard` on Windows, `pbcopy` on macOS, `wl-copy` or `xclip -selection clipboard` on Linux; the command goes in as an argument, never into a command line.
+- The scan repeats every 15 s; one PowerShell (Windows) or `scan.sh` (macOS, Linux; needs `python3`) process per scan.
 
 ## Built from
 
-1. `mods/session-history/` — `main.js`, `mod.json` (`place: "none"`), `scan.ps1` (Windows PowerShell), `icon.svg`.
+1. `mods/session-history/` — `main.js`, `mod.json` (`place: "none"`), `scan.ps1` (Windows PowerShell), `scan.sh` (macOS, Linux), `icon.svg`.
 2. `mods/space-tabs/` — bundled clone of the shipped `tabs` mod with a third panel button. It differs from stock tabs in one way: a space switch never hides the panel (it only jumps to a panel tab the space explicitly chose before), so a Resume that lands in another space doesn't slam the panel shut.
 3. Layout (a clone of `main`, not the shipped one) where:
 
@@ -63,7 +63,7 @@ and the tab bar block's content is `{ "mod": "space-tabs" }`.
 - The stack child must have a **fresh `id`** (e.g. `sessions`) distinct from `files`/`changes`; changing a block's `content.mod` under an id Herdr already loaded kept rendering the old mod.
 - Peek/floating drawers render differently from layout blocks here; this mod ships as a normal panel.
 - Peek drawers must keep one fixed layout; this panel avoids that constraint entirely.
-- Mods are trusted code: this one runs PowerShell and reads (and can delete) session transcripts under your home.
+- Mods are trusted code: this one runs PowerShell (Windows) or `sh` (macOS, Linux) and reads (and can delete) session transcripts under your home.
 
 ## Done when
 
@@ -71,4 +71,4 @@ and the tab bar block's content is `{ "mod": "space-tabs" }`.
 2. The tab bar shows `Files · Changes · Sessions`; clicking Sessions opens the shared panel.
 3. `This folder` only lists sessions belonging to the active space (per-terminal cwds included); `All` lists everything; typing filters instantly.
 4. Resume opens a tab in the exact-match space or creates a new space in the sidebar.
-5. Reveal selects the transcript file in Explorer; Delete (armed) removes it and the list rescan drops the row.
+5. Reveal shows the transcript in Explorer or Finder, or opens its folder on Linux; Delete (armed) removes it and the list rescan drops the row; Copy cmd puts the resume command on the clipboard.
