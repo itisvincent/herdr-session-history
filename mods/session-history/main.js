@@ -1,7 +1,7 @@
 // Session history panel. Minimal paint first, then full UI once the slot shows.
 
 import { View, div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, Scrollbar } from "gpui-base";
 import {
   spaces, panes, run, theme, shared, setShared, exec, home, appHome, openOverlay, props, window, knownAgents,
 } from "herdr";
@@ -612,15 +612,20 @@ export default class SessionHistory extends View {
         ),
       )
       .child(
-        v_flex()
-          .id("sh-list")
+        div()
           .flex_1()
           .min_h(0)
-          .px(6)
-          .pb(6)
-          .gap(1)
-          .overflow_y_scrollbar()
-          .children((() => {
+          .relative()
+          .child(
+            v_flex()
+              .id("sh-list")
+              .size_full()
+              .px(6)
+              .pb(6)
+              .gap(1)
+              .overflow_y_scrollbar()
+              .mode("always")
+              .children((() => {
             // Cap element count: the JS render budget is ~50ms; building every
             // row for large catalogs was interrupting space-switch re-renders.
             const CAP = 40;
@@ -664,6 +669,8 @@ export default class SessionHistory extends View {
             }
             return items;
           })()),
+          )
+          .child(Scrollbar.vertical("sh-list").viewport_from_layout().absolute().inset_0()),
       );
   }
 }
