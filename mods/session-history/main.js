@@ -139,40 +139,59 @@ export default class SessionHistory extends View {
     return String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   }
 
-  // Exact-folder space lookup for labeling: a session inside a space's root
-  // shows the space's name, so "job-ai repo root of herdr-app space" reads
-  // "herdr-app" instead of a colliding folder name.
-  spaceLabelFor(cwd) {
-    const n = this.normPath(cwd);
-    if (!n) return null;
-    // Name the space whose live terminal is in this cwd (or whose root matches).
-    const tabIds = new Set();
-    let byPane = null;
-    for (const p of panes()) {
-      if (p.terminal && p.cwd && this.normPath(p.cwd) === n) { byPane = p.tab; break; }
+  // ONE snapshot per render: panes()/spaces() each cross the mod boundary and
+  // copying them per row was slow enough to hit the render time budget
+  // ("interrupted") on space switches. Every helper below consumes ctx.
+  buildContext() {
+    const spacesNow = spaces();
+    const panesNow = panes();
+    const cwdSpace = new Map();  // normalized cwd -> space (pane cwd wins)
+    for (const sp of spacesNow) {
+      const n = this.normPath(sp.folder);
+      if (n && !cwdSpace.has(n)) cwdSpace.set(n, sp);
     }
-    if (byPane) {
-      const s = spaces().find((sp) => (sp.tabs || []).some((t) => t.id === byPane));
-      if (s) return s.name;
+    for (const p of panesNow) {
+      if (!p.terminal) continue;
+      const n = this.normPath(p.cwd);
+      if (!n) continue;
+      if (!cwdSpace.has(n)) {
+        const sp = spacesNow.find((s) => (s.tabs || []).some((t) => t.id === p.tab));
+        if (sp) cwdSpace.set(n, sp);
+      }
     }
-    const space = spaces().find((sp) => this.normPath(sp.folder) === n);
-    return space ? space.name : null;
+    // folders the active space really works in: live terminal cwds only
+    // (the recorded root folder is often a stale parent — excluded on purpose).
+    const activeFolders = new Set();
+    const active = spacesNow.find((s) => s.active);
+    if (active) {
+      const tabIds = new Set((active.tabs || []).map((t) => t.id));
+      for (const p of panesNow) {
+        if (p.terminal && tabIds.has(p.tab)) {
+          const n = this.normPath(p.cwd);
+          if (n) activeFolders.add(n);
+        }
+      }
+    }
+    return { spacesNow, active, cwdSpace, activeFolders };
   }
 
-  // Folders the active space really works in: every live terminal's cwd in
-  // its tabs. The space's recorded root folder is NOT included on purpose —
-  // it's often a stale parent (space created in repo A, terminal cd'd to B),
-  // which would pull unrelated sessions into one panel.
-  spaceFolders() {
-    const out = new Set();
-    const space = spaces().find((s) => s.active);
-    if (!space) return out;
-    const add = (p) => { const n = this.normPath(p); if (n) out.add(n); };
-    const tabIds = new Set((space.tabs || []).map((t) => t.id));
-    for (const p of panes()) {
-      if (p.terminal && tabIds.has(p.tab)) add(p.cwd);
-    }
-    return out;
+  spaceLabelFor(cwd, ctx) {
+    if (!ctx) ctx = this.buildContext();
+    return (ctx.cwdSpace.get(this.normPath(cwd)) || {}).name || null;
+  }
+
+  filtered(ctx) {
+    const q = (this.filter || "").trim().toLowerCase();
+    const scope = scopeOf();
+    const allow = new Set(agentsOf().map((a) => a.id));
+    return this.sessions.filter((s) => {
+      if (allow.size && !allow.has(s.agent)) return false;
+      if (scope.id === "folder" && !this.inSpace(s.cwd, ctx.activeFolders)) return false;
+      if (scope.id === "spaces" && !this.assignSpace(s, ctx)) return false;
+      if (!q) return true;
+      const hay = `${s.agent} ${s.folder || ""} ${s.cwd || ""} ${s.preview || ""} ${s.id || ""}`.toLowerCase();
+      return hay.includes(q);
+    });
   }
 
   inSpace(cwd, folders) {
@@ -187,42 +206,11 @@ export default class SessionHistory extends View {
 
   // Which space a session belongs to: the space with a live terminal in this
   // cwd, else the space whose root folder matches. Null = no space claims it.
-  assignSpace(s) {
-    const n = this.normPath(s.cwd);
-    if (!n) return null;
-    const pane = panes().find((p) => p.terminal && p.cwd && this.normPath(p.cwd) === n);
-    if (pane) {
-      const s2 = spaces().find((sp) => (sp.tabs || []).some((t) => t.id === pane.tab));
-      if (s2) return s2;
-    }
-    return spaces().find((sp) => this.normPath(sp.folder) === n) || null;
+  assignSpace(s, ctx) {
+    if (!ctx) ctx = this.buildContext();
+    return ctx.cwdSpace.get(this.normPath(s.cwd)) || null;
   }
 
-  filtered() {
-    const q = (this.filter || "").trim().toLowerCase();
-    const scope = scopeOf();
-    const allow = new Set(agentsOf().map((a) => a.id));
-    const folders = scope.id === "folder" ? this.spaceFolders() : null;
-    return this.sessions.filter((s) => {
-      if (allow.size && !allow.has(s.agent)) return false;
-      if (folders && !this.inSpace(s.cwd, folders)) return false;
-      if (scope.id === "spaces" && !this.assignSpace(s)) return false;
-      if (!q) return true;
-      const hay = `${s.agent} ${s.folder || ""} ${s.cwd || ""} ${s.preview || ""} ${s.id || ""}`.toLowerCase();
-      return hay.includes(q);
-    });
-  }
-
-  spaceForFolder(folder) {
-    // Exact folder only: a prefix match would drop C:\Users\Vincent\Downloads
-    // into a session-less space whose folder is C:\Users\Vincent.
-    const want = this.normPath(folder);
-    if (!want) return null;
-    return spaces().find((s) => this.normPath(s.folder) === want) || null;
-  }
-
-  // Open the session as a real Herdr tab (and a space when its folder is new),
-  // same path the + menu uses: argv starts the agent in that folder.
   resume(s) {
     if (!s?.argv?.length) return;
     const folder = s.cwd || activeFolder() || home();
@@ -333,9 +321,10 @@ export default class SessionHistory extends View {
   render(cx) {
     const t = theme();
     if (props()?.agentsMenu) return this.agentsMenu(t);
+    const ctx = this.buildContext();
     const scope = scopeOf();
     const agents = agentsOf();
-    const list = this.filtered();
+    const list = this.filtered(ctx);
 
     const row = (s, i) => {
       const open = this.expanded === s.path;
@@ -370,7 +359,7 @@ export default class SessionHistory extends View {
                 .when(s.agent === "codex", (el) => el.bg((t.ansi4 || t.accent) + "22").text_color(t.ansi4 || t.accent))
                 .child(div().text_size(9.5).font_bold().child(String(s.agent || "?").toUpperCase())),
             )
-            .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(this.spaceLabelFor(s.cwd) || s.folder || s.cwd || s.id))
+            .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(this.spaceLabelFor(s.cwd, ctx) || s.folder || s.cwd || s.id))
             .child(div().text_size(10.5).text_color(t.dim).child(age(s.mtime))),
         )
         .when(Boolean(s.preview), (el) =>
@@ -615,8 +604,10 @@ export default class SessionHistory extends View {
             .text_color(t.dim)
             .child(
               scope.id === "folder"
-                ? "No sessions for this space’s folder. Switch to All, or start an agent here."
-                : "No sessions found under ~/.pi, Claude projects, or ~/.codex.",
+                ? "No sessions for this space’s live folders. Switch to Spaces or All."
+                : scope.id === "spaces"
+                  ? "No sessions match a space yet. Open a terminal in a project folder, or switch to All."
+                  : "No sessions found under the scanned agent stores.",
             ),
         ),
       )
@@ -629,31 +620,50 @@ export default class SessionHistory extends View {
           .pb(6)
           .gap(1)
           .overflow_y_scrollbar()
-          .children(
-            scope.id === "spaces"
-              ? spaces().flatMap((sp) => {
-                  const members = list.filter((s) => {
-                    const owner = this.assignSpace(s);
-                    return owner && owner.id === sp.id;
-                  });
-                  if (!members.length) return [];
-                  return [
-                    h_flex()
-                      .id(`sh-group-${sp.id}`)
-                      .flex_none()
-                      .px(6)
-                      .pt(8)
-                      .pb(3)
-                      .gap(6)
-                      .items_center()
-                      .child(div().text_size(10.5).font_semibold().text_color(t.dim).child(sp.name))
-                      .child(div().flex_1().h(1).bg(t.border))
-                      .child(div().text_size(10).text_color(t.dim).child(String(members.length))),
-                    ...members.map((s, i) => row(s, i)),
-                  ];
-                })
-              : list.map((s, i) => row(s, i)),
-          ),
+          .children((() => {
+            // Cap element count: the JS render budget is ~50ms; building every
+            // row for large catalogs was interrupting space-switch re-renders.
+            const CAP = 40;
+            if (scope.id === "spaces") {
+              const items = [];
+              let shown = 0;
+              for (const sp of ctx.spacesNow) {
+                const members = list.filter((s) => {
+                  const owner = this.assignSpace(s, ctx);
+                  return owner && owner.id === sp.id;
+                });
+                if (!members.length) continue;
+                items.push(
+                  h_flex()
+                    .id(`sh-group-${sp.id}`)
+                    .flex_none()
+                    .px(6)
+                    .pt(8)
+                    .pb(3)
+                    .gap(6)
+                    .items_center()
+                    .child(div().text_size(10.5).font_semibold().text_color(t.dim).child(sp.name))
+                    .child(div().flex_1().h(1).bg(t.border))
+                    .child(div().text_size(10).text_color(t.dim).child(String(members.length))),
+                );
+                for (const s of members) {
+                  if (shown >= CAP) break;
+                  items.push(row(s, shown++));
+                }
+                if (shown >= CAP) break;
+              }
+              if (list.length > shown) {
+                items.push(div().px(8).py(6).text_size(11).text_color(t.dim).child(`Showing ${shown} of ${list.length} — refine with filter`));
+              }
+              return items;
+            }
+            const slice = list.slice(0, CAP);
+            const items = slice.map((s, i) => row(s, i));
+            if (list.length > CAP) {
+              items.push(div().px(8).py(6).text_size(11).text_color(t.dim).child(`Showing ${CAP} of ${list.length} — refine with filter`));
+            }
+            return items;
+          })()),
       );
   }
 }
